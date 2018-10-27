@@ -1,0 +1,114 @@
+#!/bin/zsh
+#
+# Copyright © 2018 Timothy E. Peoples <eng@toolman.org>
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+
+# Install as follows:
+#
+#   1) mkdir -p ~/.git-templates/hooks
+#   2) cp $thisFile ~/.git-templates/hooks/pre-commit
+#   3) git config --global init.templatedir '~/.git-templates'
+#
+# Never worry about committing an ELF binary ever again! :D
+#
+
+allowElfBinaries=$(git config --bool precommit.allow-binaries)
+
+exec 1>&2
+
+if [[ "${allowElfBinaries}" == "true" ]]; then
+  exit 0
+fi
+
+setopt rematchpcre
+
+bins=()
+git diff --cached --name-only --diff-filter=A -z | xargs -0 file -N -0 | while read line
+do
+  parts=( "${(ps:\0:)line}" )
+  if [[ "${parts[2]}" =~ '\bELF\b.*\bexecutable\b' ]]; then
+    bins+=( "${parts[1]}" )
+  fi
+done
+
+if [[ $#bins -eq 0 ]]; then
+  exit 0
+fi
+
+echo "WARNING: ELF executable file(s) detected in commit"
+echo ""
+echo "    You have several options -- you may:"
+echo ""
+echo "      f) Attempt to fix the situation automatically (default)"
+echo "      a) Abort and fix things manually"
+echo "      c) Continue without change (ill advised)"
+echo ""
+echo -n "So, what's it gonna be? [Fac] "
+
+while :
+do
+  read -s -k1 resp
+  action=''
+
+  # n.b. In the following `case` statement, the `(Z:n:)` part converts
+  #      newlines to whitespace (effectively unsetting $resp) while the
+  #      `:-f` part turns an empty string into `f` -- thus, our default
+  #      if the user presses <Return>.
+  #      [See "Parameter Expansion Flags" in zshexpn(1) for more info]
+
+  case "${${(Z:n:)resp}:-f}" in
+    [Ff])
+      break
+      ;;
+
+    [Aa])
+      echo -e "\nAborting commit.\n"
+      echo "Please remove all binaries from the commit and update your .gitignore accordingly."
+      exit 1
+      ;;
+
+    [Cc])
+      echo -e "\nContinuing binary commit.\n"
+      echo "NOTE: To bypass this prompt in the future, issue the following command:"
+      echo -e "\n   git config --bool precommit.allow-binaries 1"
+      exit 0
+      ;;
+  esac
+done
+
+echo -e "\nAttempting auto-fix..."
+
+gitignore="$(git rev-parse --show-toplevel)/.gitignore"
+
+mods=()
+for b in "${bins[@]}"; do
+  echo "Removing ELF executable from commit: ${b}"
+  git rm --quiet --cached "${b}" || exit 1
+
+  bb=$(basename "${b}")
+  egrep -qs "^${bb}\$" "${gitignore}" || mods+=( "${bb}" )
+done
+
+if [[ $#mods -ne 0 ]]; then
+  echo "Updating ${gitignore}"
+  for m in "${mods[@]}"; do
+    echo "   Adding: ${m}"
+    echo "${m}" >> "${gitignore}"
+  done
+
+  git add "${gitignore}" || exit 1
+fi
+
+exit 0
