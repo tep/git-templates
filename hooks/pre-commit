@@ -39,7 +39,7 @@ added="$(git diff --cached --name-only --diff-filter=A -z)"
 [[ -z "${added}" ]] && exit 0
 
 bins=()
-echo -n "${added}" | | xargs -0 file -N -0 | while read line
+echo -n "${added}" | xargs -0 file -N -0 | while read line
 do
   parts=( "${(ps:\0:)line}" )
   if [[ "${parts[2]}" =~ '\bELF\b.*\bexecutable\b' ]]; then
